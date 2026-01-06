@@ -2,8 +2,39 @@ require('dotenv').config();
 const Discord = require('discord.js');
 const client = new Discord.Client({ intents: [Discord.GatewayIntentBits.Guilds] });
 const request = require("request");
+const CryptoJS = require('crypto-js');
+const fs = require('fs');
+const path = require('path');
 process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0';
 const rateLimit = require("express-rate-limit");
+
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'default-secret-key-change-this';
+const usersFile = path.join(__dirname, 'users.json');
+
+// Load users from file
+function loadUsers() {
+    try {
+        return JSON.parse(fs.readFileSync(usersFile, 'utf8'));
+    } catch {
+        return {};
+    }
+}
+
+// Save users to file
+function saveUsers(users) {
+    fs.writeFileSync(usersFile, JSON.stringify(users, null, 2));
+}
+
+// Encrypt credentials
+function encrypt(text) {
+    return CryptoJS.AES.encrypt(text, ENCRYPTION_KEY).toString();
+}
+
+// Decrypt credentials
+function decrypt(text) {
+    const bytes = CryptoJS.AES.decrypt(text, ENCRYPTION_KEY);
+    return bytes.toString(CryptoJS.enc.Utf8);
+}
 const baseurl = 'https://emas3.ui.ac.id';
 const username = process.env.MOODLEUSER;
 const password = process.env.MOODLEPASS;
@@ -47,10 +78,34 @@ client.on('ready', () => {
     console.log(`Logged in as ${client.user.tag}!`);
     
     // Register slash commands
-    client.application.commands.create({
-        name: 'activities',
-        description: 'Get upcoming Moodle activities'
-    }).catch(console.error);
+    client.application.commands.set([
+        {
+            name: 'register',
+            description: 'Register your Moodle credentials',
+            options: [
+                {
+                    name: 'username',
+                    description: 'Your Moodle username',
+                    type: 3,
+                    required: true
+                },
+                {
+                    name: 'password',
+                    description: 'Your Moodle password',
+                    type: 3,
+                    required: true
+                }
+            ]
+        },
+        {
+            name: 'activities',
+            description: 'Get upcoming Moodle activities'
+        },
+        {
+            name: 'unregister',
+            description: 'Remove your stored Moodle credentials'
+        }
+    ]).catch(console.error);
     
     client.user.setActivity('/activities', { type: 'LISTENING' });
 });
@@ -58,20 +113,71 @@ client.on('ready', () => {
 client.on('interactionCreate', async interaction => {
     if (!interaction.isCommand()) return;
     
+    const userId = interaction.user.id;
+    const users = loadUsers();
+    
+    if (interaction.commandName === 'register') {
+        const moodleUsername = interaction.options.getString('username');
+        const moodlePassword = interaction.options.getString('password');
+        
+        try {
+            // Test credentials
+            const testLogin = await login(baseurl, moodleUsername, moodlePassword);
+            if (testLogin.error) {
+                return interaction.reply({ content: '❌ Invalid credentials!', ephemeral: true });
+            }
+            
+            // Store encrypted credentials
+            users[userId] = {
+                username: encrypt(moodleUsername),
+                password: encrypt(moodlePassword)
+            };
+            saveUsers(users);
+            
+            interaction.reply({ content: '✅ Credentials saved! You can now use /activities', ephemeral: true });
+        } catch (error) {
+            console.error('Registration error:', error);
+            interaction.reply({ content: '❌ Registration failed! Check your credentials.', ephemeral: true });
+        }
+    }
+    
+    if (interaction.commandName === 'unregister') {
+        if (users[userId]) {
+            delete users[userId];
+            saveUsers(users);
+            interaction.reply({ content: '✅ Credentials removed!', ephemeral: true });
+        } else {
+            interaction.reply({ content: '❌ No credentials found!', ephemeral: true });
+        }
+    }
+    
     if (interaction.commandName === 'activities') {
+        if (!users[userId]) {
+            return interaction.reply({ content: '❌ Please register first with /register', ephemeral: true });
+        }
+        
         await interaction.deferReply();
         try {
-            const { token, privatetoken } = await login(baseurl, username, password)
-            const events = await core_calendar_get_calendar_upcoming_view(baseurl, token)
+            const moodleUsername = decrypt(users[userId].username);
+            const moodlePassword = decrypt(users[userId].password);
+            
+            const { token, privatetoken } = await login(baseurl, moodleUsername, moodlePassword);
+            
+            if (token && token.error) {
+                await interaction.editReply('❌ Login failed! Please re-register with /register');
+                return;
+            }
+            
+            const events = await core_calendar_get_calendar_upcoming_view(baseurl, token);
             var message = '';
             for (let index = 0; index < events.events.length; index++) {
                 var date = dateformat(events.events[index].timesort * 1000)
                 message = `${message} [${date.dayF}/${date.monthF} at ${date.hourF}:${date.minuteF}] ${events.events[index].name} from ${events.events[index].course.fullname}\n\n`;
             }
-            await interaction.editReply(message || 'No activities found!')
+            await interaction.editReply(message || '📭 No activities found!')
         } catch (error) {
             console.error('Error fetching activities:', error)
-            await interaction.editReply('Error fetching activities!')
+            await interaction.editReply('❌ Error fetching activities!')
         }
     }
 });
