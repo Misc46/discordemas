@@ -77,8 +77,7 @@ function dateformat(int) {
 client.on('ready', () => {
     console.log(`Logged in as ${client.user.tag}!`);
     
-    // Register slash commands
-    client.application.commands.set([
+    const commands = [
         {
             name: 'register',
             description: 'Register your Moodle credentials',
@@ -105,13 +104,29 @@ client.on('ready', () => {
             name: 'unregister',
             description: 'Remove your stored Moodle credentials'
         }
-    ]).catch(console.error);
+    ];
+    
+    // Register globally
+    client.application.commands.set(commands).then(() => {
+        console.log('✅ Global slash commands registered!');
+    }).catch(err => {
+        console.error('❌ Failed to register global commands:', err);
+    });
+    
+    // Also register for each guild the bot is in (faster)
+    client.guilds.cache.forEach(guild => {
+        guild.commands.set(commands).catch(err => {
+            console.error(`Failed to register guild commands for ${guild.name}:`, err);
+        });
+    });
     
     client.user.setActivity('/activities', { type: 'LISTENING' });
 });
 
 client.on('interactionCreate', async interaction => {
     if (!interaction.isCommand()) return;
+    
+    console.log(`Command received: ${interaction.commandName} from ${interaction.user.tag}`);
     
     const userId = interaction.user.id;
     const users = loadUsers();
