@@ -422,7 +422,7 @@ client.on('interactionCreate', async interaction => {
             interaction.reply({ content: `✅ Deleted from global: "${removed[0].text}"`, ephemeral: false });
         }
     }
-
+});
 
 client.login(process.env.DISCORDTOKEN);
 
