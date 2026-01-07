@@ -10,6 +10,21 @@ const rateLimit = require("express-rate-limit");
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'default-secret-key-change-this';
 const usersFile = path.join(__dirname, 'users.json');
+const todosFile = path.join(__dirname, 'todos.json');
+
+// Load todos from file
+function loadTodos() {
+    try {
+        return JSON.parse(fs.readFileSync(todosFile, 'utf8'));
+    } catch {
+        return { global: [], personal: {} };
+    }
+}
+
+// Save todos to file
+function saveTodos(todos) {
+    fs.writeFileSync(todosFile, JSON.stringify(todos, null, 2));
+}
 
 // Load users from file
 function loadUsers() {
@@ -103,6 +118,107 @@ client.on('ready', () => {
         {
             name: 'unregister',
             description: 'Remove your stored Moodle credentials'
+        },
+        {
+            name: 'todo',
+            description: 'Manage todo lists (global and personal)',
+            options: [
+                {
+                    name: 'list',
+                    description: 'List todos',
+                    type: 1,
+                    options: [
+                        {
+                            name: 'personal',
+                            description: 'Show your personal todos (yes/no)',
+                            type: 3,
+                            required: false,
+                            choices: [
+                                { name: 'Yes', value: 'me' },
+                                { name: 'No', value: 'global' }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    name: 'add',
+                    description: 'Add a todo entry',
+                    type: 1,
+                    options: [
+                        {
+                            name: 'entry',
+                            description: 'The todo entry to add',
+                            type: 3,
+                            required: true
+                        }
+                    ]
+                },
+                {
+                    name: 'done',
+                    description: 'Mark a todo as done',
+                    type: 1,
+                    options: [
+                        {
+                            name: 'number',
+                            description: 'The entry number',
+                            type: 4,
+                            required: true
+                        }
+                    ]
+                },
+                {
+                    name: 'del',
+                    description: 'Delete a todo entry',
+                    type: 1,
+                    options: [
+                        {
+                            name: 'number',
+                            description: 'The entry number',
+                            type: 4,
+                            required: true
+                        }
+                    ]
+                },
+                {
+                    name: 'addglobal',
+                    description: 'Add a global todo entry',
+                    type: 1,
+                    options: [
+                        {
+                            name: 'entry',
+                            description: 'The todo entry to add',
+                            type: 3,
+                            required: true
+                        }
+                    ]
+                },
+                {
+                    name: 'doneglobal',
+                    description: 'Mark a global todo as done',
+                    type: 1,
+                    options: [
+                        {
+                            name: 'number',
+                            description: 'The entry number',
+                            type: 4,
+                            required: true
+                        }
+                    ]
+                },
+                {
+                    name: 'delglobal',
+                    description: 'Delete a global todo entry',
+                    type: 1,
+                    options: [
+                        {
+                            name: 'number',
+                            description: 'The entry number',
+                            type: 4,
+                            required: true
+                        }
+                    ]
+                }
+            ]
         }
     ];
     
@@ -195,7 +311,118 @@ client.on('interactionCreate', async interaction => {
             await interaction.editReply('❌ Error fetching activities!')
         }
     }
-});
+
+    if (interaction.commandName === 'todo') {
+        const subcommand = interaction.options.getSubcommand();
+        const todos = loadTodos();
+
+        if (subcommand === 'list') {
+            const personal = interaction.options.getString('personal') === 'me';
+            let message = '';
+
+            if (personal) {
+                // Personal todos
+                const userTodos = todos.personal[userId] || [];
+                if (userTodos.length === 0) {
+                    message = '📝 **Your Personal Todos:**\nNo todos yet!';
+                } else {
+                    message = '📝 **Your Personal Todos:**\n';
+                    userTodos.forEach((todo, idx) => {
+                        const status = todo.done ? '✅' : '❌';
+                        message += `${idx + 1}. ${status} ${todo.text}\n`;
+                    });
+                }
+            } else {
+                // Global todos
+                if (todos.global.length === 0) {
+                    message = '🌍 **Global Todos:**\nNo global todos yet!';
+                } else {
+                    message = '🌍 **Global Todos:**\n';
+                    todos.global.forEach((todo, idx) => {
+                        const status = todo.done ? '✅' : '❌';
+                        message += `${idx + 1}. ${status} ${todo.text}\n`;
+                    });
+                }
+            }
+            
+            interaction.reply({ content: message, ephemeral: false });
+        }
+
+        if (subcommand === 'add') {
+            const entry = interaction.options.getString('entry');
+            
+            if (!todos.personal[userId]) {
+                todos.personal[userId] = [];
+            }
+            
+            todos.personal[userId].push({ text: entry, done: false });
+            saveTodos(todos);
+            
+            interaction.reply({ content: `✅ Added to your todos: "${entry}"`, ephemeral: true });
+        }
+
+        if (subcommand === 'done') {
+            const number = interaction.options.getInteger('number') - 1;
+            
+            if (!todos.personal[userId] || number < 0 || number >= todos.personal[userId].length) {
+                return interaction.reply({ content: '❌ Invalid todo number!', ephemeral: true });
+            }
+            
+            todos.personal[userId][number].done = true;
+            saveTodos(todos);
+            
+            interaction.reply({ content: `✅ Marked as done: "${todos.personal[userId][number].text}"`, ephemeral: true });
+        }
+
+        if (subcommand === 'del') {
+            const number = interaction.options.getInteger('number') - 1;
+            
+            if (!todos.personal[userId] || number < 0 || number >= todos.personal[userId].length) {
+                return interaction.reply({ content: '❌ Invalid todo number!', ephemeral: true });
+            }
+            
+            const removed = todos.personal[userId].splice(number, 1);
+            saveTodos(todos);
+            
+            interaction.reply({ content: `✅ Deleted: "${removed[0].text}"`, ephemeral: true });
+        }
+
+        if (subcommand === 'addglobal') {
+            const entry = interaction.options.getString('entry');
+            
+            todos.global.push({ text: entry, done: false });
+            saveTodos(todos);
+            
+            interaction.reply({ content: `✅ Added to global todos: "${entry}"`, ephemeral: false });
+        }
+
+        if (subcommand === 'doneglobal') {
+            const number = interaction.options.getInteger('number') - 1;
+            
+            if (number < 0 || number >= todos.global.length) {
+                return interaction.reply({ content: '❌ Invalid todo number!', ephemeral: true });
+            }
+            
+            todos.global[number].done = true;
+            saveTodos(todos);
+            
+            interaction.reply({ content: `✅ Marked as done: "${todos.global[number].text}"`, ephemeral: false });
+        }
+
+        if (subcommand === 'delglobal') {
+            const number = interaction.options.getInteger('number') - 1;
+            
+            if (number < 0 || number >= todos.global.length) {
+                return interaction.reply({ content: '❌ Invalid todo number!', ephemeral: true });
+            }
+            
+            const removed = todos.global.splice(number, 1);
+            saveTodos(todos);
+            
+            interaction.reply({ content: `✅ Deleted from global: "${removed[0].text}"`, ephemeral: false });
+        }
+    }
+
 
 client.login(process.env.DISCORDTOKEN);
 
